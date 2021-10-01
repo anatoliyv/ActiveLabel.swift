@@ -26,6 +26,8 @@ typealias ElementTuple = (range: NSRange, element: ActiveElement, type: ActiveTy
     open var urlMaximumLength: Int?
     
     open var configureLinkAttribute: ConfigureLinkAttribute?
+
+    open var tapGestureRecognizer: UITapGestureRecognizer?
     
     @IBInspectable open var mentionColor: UIColor = .blue {
         didSet { updateTextStorage(parseText: false) }
@@ -196,53 +198,6 @@ typealias ElementTuple = (range: NSRange, element: ActiveElement, type: ActiveTy
         return CGSize(width: ceil(size.width), height: ceil(size.height))
     }
     
-    // MARK: - touch events
-    func onTouch(_ touch: UITouch) -> Bool {
-        let location = touch.location(in: self)
-        var avoidSuperCall = false
-        
-        switch touch.phase {
-        case .began, .moved, .regionEntered, .regionMoved:
-            if let element = element(at: location) {
-                if element.range.location != selectedElement?.range.location || element.range.length != selectedElement?.range.length {
-                    updateAttributesWhenSelected(false)
-                    selectedElement = element
-                    updateAttributesWhenSelected(true)
-                }
-                avoidSuperCall = true
-            } else {
-                updateAttributesWhenSelected(false)
-                selectedElement = nil
-            }
-        case .ended, .regionExited:
-            guard let selectedElement = selectedElement else { return avoidSuperCall }
-            
-            switch selectedElement.element {
-            case .mention(let userHandle): didTapMention(userHandle)
-            case .hashtag(let hashtag): didTapHashtag(hashtag)
-            case .url(let originalURL, _): didTapStringURL(originalURL)
-            case .custom(let element): didTap(element, for: selectedElement.type)
-            case .email(let element): didTapStringEmail(element)
-            }
-            
-            let when = DispatchTime.now() + Double(Int64(0.25 * Double(NSEC_PER_SEC))) / Double(NSEC_PER_SEC)
-            DispatchQueue.main.asyncAfter(deadline: when) {
-                self.updateAttributesWhenSelected(false)
-                self.selectedElement = nil
-            }
-            avoidSuperCall = true
-        case .cancelled:
-            updateAttributesWhenSelected(false)
-            selectedElement = nil
-        case .stationary:
-            break
-        @unknown default:
-            break
-        }
-        
-        return avoidSuperCall
-    }
-    
     // MARK: - private properties
     fileprivate var _customizing: Bool = true
     fileprivate var defaultCustomColor: UIColor = .black
@@ -272,6 +227,7 @@ typealias ElementTuple = (range: NSRange, element: ActiveElement, type: ActiveTy
         textContainer.lineBreakMode = lineBreakMode
         textContainer.maximumNumberOfLines = numberOfLines
         isUserInteractionEnabled = true
+        initializeGestureRecognizer()
     }
     
     fileprivate func updateTextStorage(parseText: Bool = true) {
@@ -466,32 +422,6 @@ typealias ElementTuple = (range: NSRange, element: ActiveElement, type: ActiveTy
         return nil
     }
     
-    
-    //MARK: - Handle UI Responder touches
-    open override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
-        if onTouch(touch) { return }
-        super.touchesBegan(touches, with: event)
-    }
-    
-    open override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
-        if onTouch(touch) { return }
-        super.touchesMoved(touches, with: event)
-    }
-    
-    open override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
-        _ = onTouch(touch)
-        super.touchesCancelled(touches, with: event)
-    }
-    
-    open override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
-        if onTouch(touch) { return }
-        super.touchesEnded(touches, with: event)
-    }
-    
     //MARK: - ActiveLabel handler
     fileprivate func didTapMention(_ username: String) {
         guard let mentionHandler = mentionTapHandler else {
@@ -534,17 +464,43 @@ typealias ElementTuple = (range: NSRange, element: ActiveElement, type: ActiveTy
     }
 }
 
-extension ActiveLabel: UIGestureRecognizerDelegate {
-    
-    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        return true
+// MARK: - Gesture recognizer
+extension ActiveLabel {
+    private func initializeGestureRecognizer() {
+        let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleGestureRecognizer(_:)))
+        recognizer.numberOfTapsRequired = 1
+        tapGestureRecognizer = recognizer
+        addGestureRecognizer(recognizer)
     }
-    
-    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRequireFailureOf otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        return true
-    }
-    
-    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        return true
+
+    @objc
+    func handleGestureRecognizer(_ recognizer: UITapGestureRecognizer) {
+        let location = recognizer.location(in: self)
+
+        switch recognizer.state {
+        case .began, .changed:
+            break
+
+        case .ended:
+            guard let selectedElement = element(at: location) else { return }
+
+            switch selectedElement.element {
+            case .mention(let userHandle): didTapMention(userHandle)
+            case .hashtag(let hashtag): didTapHashtag(hashtag)
+            case .url(let originalURL, _): didTapStringURL(originalURL)
+            case .custom(let element): didTap(element, for: selectedElement.type)
+            case .email(let element): didTapStringEmail(element)
+            }
+
+            let when = DispatchTime.now() + Double(Int64(0.25 * Double(NSEC_PER_SEC))) / Double(NSEC_PER_SEC)
+            DispatchQueue.main.asyncAfter(deadline: when) {
+                self.updateAttributesWhenSelected(false)
+                self.selectedElement = nil
+            }
+
+        default:
+            updateAttributesWhenSelected(false)
+            selectedElement = nil
+        }
     }
 }
